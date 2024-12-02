@@ -2,7 +2,8 @@ import express, { text } from "express";
 import axios from "axios";
 import dotenv from 'dotenv';
 import redis from 'redis';
-
+import crypto from 'crypto';
+import path from 'path';
 dotenv.config();
 const redisClient = redis.createClient();
 redisClient.on('error', (err) => {
@@ -16,9 +17,9 @@ redisClient.on('error', (err) => {
 const app = express();
 app.use(express.json());
 
-const { WEBHOOK_VERIFY_TOKEN, GRAPH_API_TOKEN, PORT, OKTO_TOKEN } = process.env;
+const { WEBHOOK_VERIFY_TOKEN, GRAPH_API_TOKEN, PORT, OKTO_TOKEN, HARDCODED_USER_TOKEN_ID, OAUTH_CLIENT_ID, REDIRECT_URI } = process.env;
 console.log('Okta token', OKTO_TOKEN);
-const userTokenId = "eyJhbGciOiJSUzI1NiIsImtpZCI6IjM2MjgyNTg2MDExMTNlNjU3NmE0NTMzNzM2NWZlOGI4OTczZDE2NzEiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhenAiOiI0MDc0MDg3MTgxOTIuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLCJhdWQiOiI0MDc0MDg3MTgxOTIuYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLCJzdWIiOiIxMDY4MTgxMjYyODA5MTk5ODU0NzMiLCJlbWFpbCI6InNheWFua2FyMTMwOEBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiYXRfaGFzaCI6InpmT1JqQ3VUWDJwMFpIV0c4RW9feFEiLCJpYXQiOjE3MzMxMDAxMTIsImV4cCI6MTczMzEwMzcxMn0.akAmLCM73t1WSPbNRiRw12sVrk4q1CH5xTD8MyqnfFk3Q_NNROMQFfv9dKB2dzwX2aKAdsYUYnfJ3pXg0S2u7v4xe37tmZUoLOgY9jNCdYXq6Ca3cDOu0WWNbcPy1gxCyQWUY6qJ0pwZiHMGhcxLoGxkI0CO3fBJL_lZwveCk8SxS3fusmdnlzBal3KuciJmKqEZZnuDfANoKrwErCY8xRJuX9PmemXZa0TKwDwgfb6R0LxaAvfpXE2Wf13ZBXF2pOnCbaacqIDkVeuC55O4yRD26ReN-y5ZgfmGQPQp3vIin6T01uxeZQDL1sYwLxhrDA04G_bRYUrLv0SPNkvRpA";
+const userTokenId = HARDCODED_USER_TOKEN_ID;
 
 async function authenticateWithOkto(id_token) {
   const options = {
@@ -60,6 +61,18 @@ function formatWalletsMessage(jsonData) {
 async function process_msg(req) {
   const message = req.body.entry?.[0]?.changes[0]?.value?.messages?.[0];
   const msg = message.text.body;
+  if(msg === '/start') {
+    const cache = await get_auth_token(message.from);
+    if (cache) {
+      console.log('Token retrieved from redis', cache);
+      return await send_msg(req, 'User already authenticated');
+    }
+    const state = crypto.randomBytes(16).toString("hex");
+    await redisClient.set(`auth_state:${state}`, message.from);
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${OAUTH_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=id_token&scope=openid%20email%20profile&state=${state}&nonce=${nonce}`;
+    return await send_msg(req, `Click here to authenticate: ${authUrl}`);
+  }
   if(msg === '/login') {
     const cache = await get_auth_token(message.from);
     if (cache) {
@@ -445,9 +458,44 @@ app.get("/webhook", (req, res) => {
   }
 });
 
-app.get("/", (req, res) => {
-  res.send(`<pre>Nothing to see here.
-Checkout README.md to start.</pre>`);
+
+app.get('/redirect', async (req, res) => {
+  try {
+      // Extract query parameters
+      const { state, id_token } = req.query;
+
+      // Check if `state` is valid
+      if (!state || !id_token) {
+          return res.status(400).send('Invalid request: Missing state or id_token');
+      }
+
+      // Retrieve associated user from Redis
+      const userId = await redisClient.get(`auth_state:${state}`);
+      if (!userId) {
+          return res.status(400).send('Invalid or expired state');
+      }
+
+      // Process the authenticated user
+      console.log(`User ${userId} authenticated successfully with token ${id_token}`);
+
+      // Delete state to prevent reuse
+      await redisClient.del(`auth_state:${state}`);
+
+      const resp = await authenticateWithOkto(userTokenId);
+      const textMessage = resp?.data?.data?.message === "success" ? "User authenticated" : "User not authenticated";
+      console.log('/login', userId, textMessage);
+      await save_auth_token(userId, resp.data);
+      resp?.data?.data?.message === "success" && await send_msg(req, textMessage);
+      // Send response or redirect
+  } catch (err) {
+      console.error(err);
+      res.status(500).send('Internal Server Error');
+  }
+});
+
+app.get('/', (req, res) => {
+  const filePath = path.resolve('index.html'); // Automatically uses the current directory
+  res.sendFile(filePath);
 });
 
 app.listen(PORT, () => {

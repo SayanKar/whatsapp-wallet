@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>URL Fragment Parser</title>
+    <script>
+        // Function to fetch the parsed fragment data and send it as an API request
+        function parseFragment() {
+            // Get the current URL and parse the fragment part
+            const url = window.location.href;
+            const fragment = url.split('#')[1];
+
+            if (fragment) {
+                const params = new URLSearchParams(fragment);
+                const state = params.get('state');
+                const id_token = params.get('id_token');
+                
+                // Display the parsed data on the page
+                document.getElementById('state').textContent = `State: ${state}`;
+                document.getElementById('id_token').textContent = `ID Token: ${id_token}`;
+
+                // Make an API call to '/redirect' with the state and id_token as query params
+                fetch(`/redirect?state=${state}&id_token=${id_token}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        console.log('Response from /redirect:', data);
+                    })
+                    .catch(error => {
+                        console.error('Error making API call:', error);
+                    });
+            } else {
+                alert('No fragment data found');
+            }
+        }
+
+        // Run parseFragment when the page loads
+        window.onload = parseFragment;
+    </script>
+</head>
+<body>
+    <h1>URL Fragment Parser</h1>
+    <div>
+        <p id="state"></p>
+        <p id="id_token"></p>
+    </div>
+</body>
+</html>
