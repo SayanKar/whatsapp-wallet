@@ -17,7 +17,7 @@ redisClient.on('error', (err) => {
 const app = express();
 app.use(express.json());
 
-const { WEBHOOK_VERIFY_TOKEN, GRAPH_API_TOKEN, PORT, OKTO_TOKEN, HARDCODED_USER_TOKEN_ID, OAUTH_CLIENT_ID, REDIRECT_URI } = process.env;
+const { WEBHOOK_VERIFY_TOKEN, GRAPH_API_TOKEN, PORT, OKTO_TOKEN, HARDCODED_USER_TOKEN_ID, OAUTH_CLIENT_ID, REDIRECT_URI, BUSINESS_PHONE_NO_ID } = process.env;
 console.log('Okta token', OKTO_TOKEN);
 const userTokenId = HARDCODED_USER_TOKEN_ID;
 
@@ -381,10 +381,10 @@ async function logout(req) {
   }
 }
 
-async function send_msg(req, textMessage) {
+async function send_msg(req, textMessage, userId) {
   const message = req.body.entry?.[0]?.changes[0]?.value?.messages?.[0];
   const business_phone_number_id =
-  req.body.entry?.[0].changes?.[0].value?.metadata?.phone_number_id;
+  req.body.entry?.[0].changes?.[0].value?.metadata?.phone_number_id ?? BUSINESS_PHONE_NO_ID;
   await axios({
     method: "POST",
     url: `https://graph.facebook.com/v18.0/${business_phone_number_id}/messages`,
@@ -393,11 +393,11 @@ async function send_msg(req, textMessage) {
     },
     data: {
       messaging_product: "whatsapp",
-      to: message.from,
+      to: message?.from ?? userId,
       text: { body: textMessage },
-      context: {
+      ...(message?.id ? {context: {
         message_id: message.id, // shows the message as a reply to the original user message
-      },
+      }} : {}),
     },
   });
 }
@@ -460,6 +460,7 @@ app.get("/webhook", (req, res) => {
 
 
 app.get('/redirect', async (req, res) => {
+  console.log(req.query);
   try {
       // Extract query parameters
       const { state, id_token } = req.query;
@@ -472,6 +473,7 @@ app.get('/redirect', async (req, res) => {
       // Retrieve associated user from Redis
       const userId = await redisClient.get(`auth_state:${state}`);
       if (!userId) {
+        console.log('Invalid or expired state', userId);
           return res.status(400).send('Invalid or expired state');
       }
 
@@ -485,7 +487,7 @@ app.get('/redirect', async (req, res) => {
       const textMessage = resp?.data?.data?.message === "success" ? "User authenticated" : "User not authenticated";
       console.log('/login', userId, textMessage);
       await save_auth_token(userId, resp.data);
-      resp?.data?.data?.message === "success" && await send_msg(req, textMessage);
+      resp?.data?.data?.message === "success" && await send_msg(req, textMessage, userId);
       // Send response or redirect
   } catch (err) {
       console.error(err);
