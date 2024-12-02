@@ -483,7 +483,7 @@ app.get('/redirect', async (req, res) => {
       // Delete state to prevent reuse
       await redisClient.del(`auth_state:${state}`);
 
-      const resp = await authenticateWithOkto(userTokenId);
+      const resp = await authenticateWithOkto(id_token);
       const textMessage = resp?.data?.data?.message === "success" ? "User authenticated" : "User not authenticated";
       console.log('/login', userId, textMessage);
       await save_auth_token(userId, resp.data);
